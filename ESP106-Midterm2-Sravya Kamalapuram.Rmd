@@ -1,0 +1,187 @@
+---
+title: "ESP106-Midterm2-Sravya Kamalapuram"
+output: html_document
+---
+
+### Midterm2 - Sravya Kamalapuram
+
+Loading libaries
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+library(terra)
+```
+
+Reading the input shape files
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Reading the environment data
+env = rast("env.tif")
+
+#Reading the CA county boundaries shaped file
+ca_county = vect("CA_Counties_TIGER2016.shp")
+```
+
+#### Question1: Getting the range and units from env file 
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+env
+
+```
+
+The ranges are given as follows: /
+Elevation: -105.000 ft to 4239 ft/
+TEmperature: -3.89 C to 24.4 C /
+Precipitation: 46 mm to 2287mm /
+
+Units: 
+Elevation: feet/ 
+Temperature: Centigrade/ 
+Precipitation: Millimeters/
+
+#### Changing the Projections
+
+It can be seen that the projections for both the files are different.
+
+Environmental data has a "longlat" projection. While CA County boundaries file has "Mercator" projection. 
+
+We change the projection of CA county boundaries file to longlat. 
+
+``` {r warning=FALSE, echo=FALSE, message=FALSE}
+
+#Changing the projection for CA_county file 
+ca_county <- terra::project(ca_county, "+proj=longlat +datum=WGS84")
+
+paste0("CA County data")
+ca_county
+
+
+```
+
+#### Cropping the Elevation data in environmental file 
+
+To map the elevation data for California alone, we crop the elevation in the environment data to match the extent of CA county boundaries. 
+
+``` {r warning=FALSE, echo=FALSE, message=FALSE}
+
+#Adding a new variable by changing the extent 
+env1 <- crop(env, ext(ca_county))
+
+paste ("Extent of Elevation data:")
+ext(env1)
+
+```
+
+#### Question 2: 
+#### Mapping the elevation data for California counties 
+
+``` {r warning=FALSE, echo=FALSE, message=FALSE}
+plot(env1$elevation)
+plot(ca_county, add=TRUE)
+
+```
+
+
+#### Question 3: 
+#### Extract and graph the elevation data for California counties
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Using the extract command to extract elevation data for CA_counties
+e = extract(env1$elevation, ca_county)
+
+#Graph: Distribution of elevation data for California
+density_elev = density(e$elevation, na.rm=TRUE)
+p =plot(density_elev, main = "Distribution of elevation in California")
+
+```
+
+
+#### Question 4: 
+
+Data frame with latitude and environment data for each county 
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Extract the mean for each polygon of the CA-county shape file 
+env_mean <- extract(env1, ca_county,mean, na.rm =TRUE)
+
+#Calculate the centroid for each county
+cent = centroids(ca_county)
+
+#Put centroids into a dataframe, along with the latitude and longitude values
+cent_df=as.data.frame(cent,xy=TRUE)
+
+#Appending the NAME and latitude of counties to the env_mean file 
+env_mean$NAME = cent$NAME
+env_mean$lat = cent$INTPTLAT
+
+#Reordering the dataframe
+env_mean = env_mean[,c(1,5,2,3,4,6)]
+
+paste0("Dataframe with Environment data and Latitudes:")
+head(env_mean)
+
+```
+
+
+#### Sorting and printing counties alphabetically
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Sorting the counties
+name1 = env_mean[order(env_mean$NAME), ]
+
+#Printing the first five counties 
+paste0("The first 5 counties are:")
+head(name1,5)
+```
+
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Printing the last five counties 
+paste0("The last 5 counties are:")
+tail(name1,5)
+```
+
+
+#### Question 5: Printing the values of hottest, wettest and highest counties 
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+paste0("The hottest county is: ", env_mean[which.max(env_mean$temperature),]$NAME)
+
+paste0("The wettest county is:", env_mean[which.max(env_mean$precipitation),]$NAME)
+
+paste0("The highest county is:", env_mean[which.max(env_mean$elevation),]$NAME)
+
+```
+#### Question 6
+
+#### Regression of temperature vs latitude + elevation 
+```{r warning=FALSE, echo=FALSE, message=FALSE }
+
+# Converting the environment shape file to a dataframe
+env_df = as.data.frame(env,xy=TRUE)
+
+#Getting a sample of 10000 cells from the data 
+env_sample = env_df[sample(nrow(env_df), 10000), ]
+
+#Regression model for the sample data, temperature vs latitude + elevation 
+lm1 = lm (formula = env_sample$temperature~env_sample$elevation+env_sample$y)
+
+#Summary of lm1
+paste0("Summary of the regression model")
+summary(lm1)
+```
+
+From the summary, we see that all the estimates are significant and the R-squared value is around 0.901. Which implies that the model explains close to 90% of the information in the sample data. 
+
+#### Question 7
+
+The coefficient of elevation in the model is -0.004410053. That is for every one foot change in the elevation, the temperature changes by -0.004410053 Centigrade, other things being constant
+
+The coefficient of latitude is -0.829316974. That is going one degree northward would change temprature by -0.829316974. 
+
+One degree change in the latitude, is equivalent to 111kms. That is 1km northward is 1/111th of a degree. 
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+#Temperature change by going 1km northward 
+temp_change = (-0.829316974)*1/111
+
+#Finding the elevation for the same change in temperature 
+elev_change = temp_change/-0.004410053 # in feet 
+```
+
+##### This implies that 1.6941 feet or 0.5163meters change in elevation causes equivalent temperature effect to moving 1km northward. 
