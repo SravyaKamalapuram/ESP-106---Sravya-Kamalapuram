@@ -63,7 +63,8 @@ To map the elevation data for California alone, we crop the elevation in the env
 ``` {r warning=FALSE, echo=FALSE, message=FALSE}
 
 #Adding a new variable by changing the extent 
-env1 <- crop(env, ext(ca_county))
+env1 = crop(env, ext(ca_county))
+env1 = mask(env1,ca_county)
 
 paste ("Extent of Elevation data:")
 ext(env1)
