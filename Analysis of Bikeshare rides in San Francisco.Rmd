@@ -1,0 +1,1263 @@
+---
+title: "ESP 106 - Analysis of Bikeshare rides in San Francisco - Maha Ahmad and Sravya Kamalapuram"
+output: html_document
+Authors: Sravya Kamalapuram and Maha Ahmad
+---
+### Introduction
+
+There is a growing concern regarding global warming and climate change around the world. Rising temperatures, increasing sea levels and number of natural disasters are compelling individuals and governments to work towards ways of reducing greenhouse gas emissions. In the United States, transportation sector alone accounts for ~28% of the total Greenhouse gas emissions. There is a need to shift the attitude of the car-dependent society in the United States towards non-motorized modes such as walking, biking and also public transit. Understanding the patterns in the current usage of these modes can help in the designing new policies and also evaluating the existing policies. In this project, we try to analyze the bikeshare system in San Francisco.  
+
+San Francisco is the cultural, commercial and financial capital of Northern California. It spans over an area of 122 sqkm and population is close to 900,000 which makes it the second densely populated large city in the US. A part of the larger San Francisco bay area, the city is known for its diversified service economy and employment clusters.  Highly dense population and employment have lead to problems of traffic congestion, parking, pollution, etc. 
+
+In the recent years, there has been an increase in the amount of biking in many cities around the United States and a number of companies have introduced bikerentals and bikeshare programs. BayWheels by Lyft is one such bikeshare program in San Francisco. It includes both docked (station-based) and dockless bikeshare programs and has around 2000 bikes, over 200 stations in the city. Analyzing the bikeshare rides could give interesting insights into the bike patterns in the city and help further in studying the impacts of bikeshare on transportation.  
+
+### Objectives and Research Questions
+
+The primary objective of this project is to get hands-on experience with various aspects of Data Science such as Data cleaning, Exploratory Data Analysis, Spatial Data Analysis, Regression, etc learnt as part of the ESP 106 Environmental Data Science course.   
+
+Using real and open source data, we try to answer the following research questions:   
+1. How do the number of rides vary across each month, day, weekday/weekend?   
+2. Are there morning and evening peak hours?   
+3. How are the bikeshare stations and rides distributed in San Francisco? And what factors affect this distribution?   
+4. Do bikeshare rides help with first/last mile connectivity to passenger rail stations?   
+5. Can we model the bikeshare ridership based on the socio-economic characteristics of a census tract? 
+6. How do the OLS regression and random forest RMSE differ? 
+
+We have divided this Markdown file into two parts:     
+  Part 1: Exploratory and Spatial Data Analysis       
+  Part 2: Socioeconomic Characteristics and Modeling Techniques     
+
+This has been done so that there is ease in working with different data sources and the data analysis could help with the modeling in regression.      
+
+Though the primary data source - "BayWheels Bikeshare Data for San Francisco" remains the same for both the parts, other data sources vary based on the analysis. The primary data source is described initially and other data sources used are described as and when required.   
+
+### Importing Libraries
+
+Let's start by importing the libraries  
+
+```{r message= FALSE, warning = FALSE}
+library(terra)
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(stringr)
+library(ggplot2)
+library(lubridate)
+library(gridExtra)
+library(randomForest)
+library(ALEPlot)
+options(tigris_use_cache = TRUE)
+```
+
+### Importing the data 
+
+#### Primary Data Source
+
+The primary data source for this project is the BayWheels Bikeshare - Lyft System data, available at (https://s3.amazonaws.com/baywheels-data/index.html). We chose to study the bikeshare rides of San Francisco for the third quarter (July-September) of 2019.   
+
+The data is classified according to each month and each bikeshare ride has the following attributes.   
+
+1. Trip Duration (seconds)
+2. Start Time and Date
+3. End Time and Date
+4. Start Station ID
+5. Start Station Name
+6. Start Station Latitude
+7. Start Station Longitude
+8. End Station ID
+9. End Station Name
+10.End Station Latitude
+11.End Station Longitude
+12.Bike ID
+13.User Type (Subscriber or Customer – “Subscriber” = Member or “Customer” = Casual)  
+
+This data includes both docked and dockless rides.     
+
+First we get the data for three months - July, August and September of 2019.     
+
+```{r message=FALSE, warning=FALSE}
+bike_july = read.csv("201907-baywheels-tripdata1.csv")
+bike_aug = read.csv("201908-baywheels-tripdata1.csv")
+bike_sep = read.csv("201909-baywheels-tripdata1.csv")
+```
+
+We need to merge the data from all three months to get a final dataset. But the number of columns in all the files is not the same. The last column from bike_july dataset is removed.      
+
+
+```{r message =FALSE, warning=FALSE}
+bike_july = bike_july[-c(15)]
+
+```
+
+Now all the three files have the same number of columns. We can rbind them to get a final dataset. The bike_july, bike_august and bike_september are then removed from the environment.     
+
+```{r message =FALSE, warning=FALSE}
+bike = rbind(bike_july, bike_aug, bike_sep)
+
+remove(bike_july, bike_aug,bike_sep)
+```
+
+### Part 1 
+
+#### Exploratory Data Analysis
+
+In this section, we try to understand the characteristics of the data by performing some exploratory data analysis.
+
+#### Data Wrangling
+
+We transform the data to aid in further analysis.   
+
+```{r message =FALSE, warning=FALSE}
+bike$start_time = ymd_hms(bike$start_time)
+bike$end_time = ymd_hms(bike$end_time)
+
+#Extract month and hour 
+bike$month = month(bike$start_time, label = TRUE, abbr = FALSE)
+bike$hour = hour(bike$start_time)
+
+#Creating a column for day of the week 
+bike$day = weekdays(bike$start_time)
+
+#Creating a column for weekday or weekend
+bike$weekday = ifelse(bike$day %in% c("Saturday", "Sunday"), "weekend", "weekday")
+
+```
+
+First, let's look at the distribution of rides by each day for all the three months. For this we group the number of rides per day.   
+
+```{r message = FALSE, warning = FALSE}
+
+rides_day = as.data.frame(bike %>%
+  group_by(Date = date(bike$start_time)) %>%
+  dplyr:: summarize(Rides = n()))
+```
+
+We now the plot the rides on each day to understand the distribution.   
+
+```{r message = FALSE, warning = FALSE}
+th=theme_bw(base_size=9)+theme(strip.background =element_rect(fill="white"))
+
+
+r = ggplot(rides_day, aes(x= Date, y = Rides)) + geom_line() +th
+r = r+ labs(x= "Date", y = "Number of Rides", title = "Rides on each day") +theme(plot.title = element_text(hjust=0.5))
+r
+```
+
+The number of rides is oscillating with up and downs. Let's see how the number of rides vary over each day of the week.   
+
+Grouping the number of rides by day of the week and sorting this dataframe.   
+
+```{r message = FALSE, warning = FALSE}
+
+rideseachday = as.data.frame(bike%>%
+  group_by(Day = bike$day) %>%
+  dplyr:: summarize(Rides = n()))
+
+rideseachday$Day <- factor(rideseachday$Day, levels= c( "Monday", 
+    "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+rideseachday = rideseachday[order(rideseachday$Day), ]
+```
+
+Now we plot these rides.   
+
+```{r message = FALSE, warning=FALSE}
+r1 = ggplot(rideseachday, aes(x= Day, y = Rides)) + geom_bar(stat = "identity") +th
+r1 = r1 + labs(x= "Day of the week", y= "Number of rides", title = "Rides on each day of the week") + theme(plot.title = element_text(hjust=0.5)) + geom_text(aes(label=Rides), position=position_dodge(width=0.9), vjust=-0.25)
+r1
+```
+
+The number of rides dip each week on the weekends. Hence we see the oscillations in the plot above.   
+
+Let's see which days have maximum and minimum number of rides  
+
+```{r message = FALSE, warning = FALSE}
+max_day = rideseachday[which.max(rideseachday$Rides),]
+paste("Maximum number of rides on", max_day$Day)
+
+
+min_day = rideseachday[which.min(rideseachday$Rides),]
+paste("Minimum number of rides on", min_day$Day)
+
+```
+There is an unusual dip in the starting of July. Is it because of July 4th? Let's examine.   
+
+The minimum most point in July also seems to be the global minimum. Let's see the date for this.   
+
+```{r message = FALSE, warning = FALSE}
+
+global_min = rides_day[which.min(rides_day$Rides), ]
+paste("Date for global minimum:",global_min$Date)
+```
+Yes, the global minimum seems to be on 4th of July.
+
+Is there a distinct morning peak or evening peak? 
+
+```{r message = FALSE, warning = FALSE}
+rides_hour = as.data.frame(bike%>%
+  group_by(Hour = bike$hour) %>%
+  dplyr:: summarize(Rides = n()))
+
+r3 = ggplot(rides_hour, aes(x= Hour, y = Rides)) + geom_line() +th 
+r3 = r3 + labs(x= "Hour", y= "Number of rides", title = "Rides distributed by hour of the day") + theme(plot.title = element_text(hjust=0.5))
+r3= r3+scale_x_continuous(breaks = seq(0,23,1))
+r3
+
+
+```
+
+There is a distant morning and evening peak. Morning peak from 7AM to 10AM and evening peak from 3PM to 7PM.
+
+Let's find out the average duration of each ride and convert the duration into minutes. 
+
+```{r message= FALSE, warning= FALSE}
+avg_duration = mean(bike$duration_sec)
+
+avg_duration = round(avg_duration/60, digits = 4)
+
+paste("The average duration of each rides in minutes is:", avg_duration)
+
+```
+Next, lets see who are taking most of the trips. Is it customers or subscribers? By customers it means casual users who do not have a monthly or yearly pass. 
+
+``` {r message= FALSE, warning = FALSE}
+
+user = as.data.frame(bike %>% 
+                      group_by(User = bike$user_type) %>% 
+                      dplyr :: summarize(Rides =n()))
+r2 = ggplot(user, aes(x = User, y = Rides)) + geom_bar(stat= "identity") +th
+r2 = r2 + labs(x= " User Type", y = "Percentage of Rides", title ="Rides by user type") + theme(plot.title = element_text(hjust=0.5)) + geom_text(aes(label=paste0(round(Rides/nrow(bike)*100), "%")), position=position_dodge(width=0.9), vjust=-0.25)
+r2
+```
+
+Most of the rides are being taken by the subscribers. This indicates that people are using bikeshare regularly which is a positive sign towards change in attitude towards environmental friendly transportation modes. 
+
+Lets see how the distribution of the user type is on weekdays and weekends. 
+
+```{r message=FALSE, warning = FALSE}
+bike_weekday_user = as.data.frame(bike %>% 
+  filter(weekday  == "weekday") %>%
+  group_by(user_type) %>% 
+  dplyr :: summarize(Rides =n())) %>%
+  mutate(percent = Rides/sum(Rides) *100)
+
+paste0("Distribution of user type on weekdays")
+
+bike_weekday_user
+```
+The gap between customers and subsribers is very high during the weekdays. It's reasonable because most of the trips on weekdays are regular commute trips and bikeshare is mostly being used by subscribers.
+
+Now we tabulate the types of users on weekends. 
+
+```{r message = FALSE, warning = FALSE}
+bike_weekend_user = as.data.frame(bike %>% 
+  filter(weekday  == "weekend") %>%
+  group_by(user_type) %>% 
+  dplyr :: summarize(Rides =n())) %>%
+  mutate(percent = Rides/sum(Rides) *100)
+
+paste0("Distribution of user type on weekends")
+bike_weekend_user
+
+```
+As expected the percentage of customers or casual users increases during the weekends. 
+
+#### Spatial Data Analysis 
+
+In this section, analyze the spatial distribution of bikeshare rides in San Francisco city. 
+Let's start by getting the neighborhood map of San Francisco and convert it into vector data with longlat projection.
+
+```{r message = FALSE, warning = FALSE}
+
+n = "geo_export_39961c56-6d7e-41e1-ac34-1a2ff28f999c.shp"
+neigh = vect(n)
+neigh <- terra::project(neigh, "+proj=longlat +datum=WGS84")
+```
+
+Now we get the census tract shapefile of San Francisco. This is then converted into vector data and cropped according to the neighborhood map file 
+
+```{r message = FALSE, warning=FALSE}
+
+s= "San_Francisco_Bay_Region_2010_Census_Tracts.shp"
+sf= vect(s)
+sf <- terra::project(sf, "+proj=longlat +datum=WGS84")
+sf= crop(sf, neigh)
+
+```
+
+Now we see the distribution of bike stations in the city. For this we need the data of bike stations in the city which is taken from the Metropolitan Transportation Commission (MTC) website. 
+
+```{r message = FALSE, warning = FALSE}
+bike_stations = read.csv("Bay_Area_Bikeshare_Stations.csv")
+```
+
+This data has the following attributes:   
+  1. Station ID   
+  2. Station Name   
+  3. Has Kiosk  
+  4. Dock Count   
+  5. Station Latitude   
+  6. Station Longitude   
+  7. Region_ID  
+  8. Shape   
+  
+This data needs to be filtered to get the bike stations in San Francisco and then we convert the shapefile to an sf object.   
+
+```{r message=FALSE, warning=FALSE}
+bike_stations = bike_stations %>%
+  filter(Region_ID == 3) %>%
+  sf:: st_as_sf(coords= c("Station.Longitude", "Station.Latitude"),crs = "+proj=longlat +datum=WGS84")
+
+```
+
+Now we plot the distribution of bike stations on the San Francisco map   
+
+```{r message=FALSE, warning=FALSE}
+plot(sf, main = "Distribution of Bike stations in San Francisco")
+plot(bike_stations,add=TRUE)
+```
+
+Lets look at the distribution of bikeshare starting points in San Francisco 
+It should be noted that the bikeshare rides data includes both docked and dockless rides.   
+We first convert the bike data into vector form and crop into the extent of San Francisco before plotting it.   
+
+```{r message= FALSE, warning = FALSE}
+bike_start = vect(bike, c("start_station_longitude", "start_station_latitude"))
+bike_start = crop(bike_start, ext(neigh))
+
+plot(sf, main = "Distribution of bike rides in San Francisco")
+plot(bike_start,add=TRUE)
+```
+
+We see that bikerides and bike stations are skewed to one side. Let's find out the reasons for these.   
+
+Geographical features such as elevation could make biking uncomfortable. Does the distribution of bike stations have a correlation with elevation profile of San Francisco?   
+
+Now we import the geographical features shapefile. This file contains data for elevation, temperature and precipitation. We crop this file for the extent of San Francisco and plot the map of elevation with bike stations in the city. 
+
+```{r message = FALSE, warning = FALSE}
+env = rast("env.tif")
+env = crop(env,neigh)
+
+plot(env$elevation, main = "Elevation and Distribution of bike stations")
+plot(bike_stations,add=TRUE,col="red")
+plot(sf,add = TRUE)
+```
+
+It can be seen from the map above that regions with high elevation have fewer bike stations. 
+Are there some other reasons for skewness in bike stations and rides. Below we examine the influence of factors such as income, jobs, etc for each census tract.  
+
+We get the required data from Census by using census api.
+
+```{r message = FALSE, warning =FALSE}
+census_api_key("bcda45287d5d96ad48bc1910da4e530392b0a1d4",install=TRUE, overwrite=TRUE)
+```
+
+Now we get the ACS data of 2019 for San Francisco county for each census tract and variable "B19013_001" which is the median household income. This data includes geometry of each census tract and needs to be cropped for the extent of the city. 
+
+```{r message = FALSE, warning = FALSE}
+box = c(xmin=-122.514947579509,ymin =37.7081319996789,xmax=-122.35696687666, ymax=37.8332976394883)
+
+sf_hh_income <- get_acs(state = "CA", county = "San Francisco", geography = "tract", 
+                  variables = "B19013_001", geometry = TRUE,year = 2019) %>%
+                sf:: st_transform( crs = "+proj=longlat +datum=WGS84") %>%
+                sf:: st_crop(box)
+
+```
+
+Plotting distribution of bike stations across census tracts based on median household income
+
+```{r message = FALSE, warning = FALSE}
+p = ggplot(sf_hh_income) + geom_sf(aes(fill=estimate))+ geom_sf(data = bike_stations, size = 1, 
+                                     shape = 23, fill = "green")
+p = p +labs(title = "Distribution of bike stations a/c to household income") +
+      theme_minimal()+
+  scale_fill_viridis_c(option="magma")
+p
+```
+
+
+This graph doesn't show much. Some high income and low income neighborhoods do not have bike stations and it is difficult to infer something from this graph. 
+
+Lets check with another variable- job density in each census tract. 
+First we get the jobs in each census tract denoted by variable name "B23001_002" in the ACS data. 
+
+```{r message = FALSE, warning =FALSE}
+
+sf_jobs <- get_acs(state = "CA", county = "San Francisco", geography = "tract", 
+                  variables = "B23001_002", geometry = TRUE,year = 2019) %>%
+                sf:: st_transform( crs = "+proj=longlat +datum=WGS84") %>%
+                sf:: st_crop(box)
+
+```
+
+Calculating the area of each census tract 
+```{r message = FALSE, warning=FALSE}
+sf$area = area(sf)/1000000
+area = data.frame("Census_ID" = sf$trctid, "Area" = sf$area)
+area = area %>% 
+  group_by(Census_ID) %>%
+  summarize(Area = sum(Area))
+```
+
+Merging the area dataframe with sf_jobs and calculating the job density for each census tract. 
+
+```{r message = FALSE, warning= FALSE}
+
+sf_jobs = merge(sf_jobs,area, by.x="GEOID", by.y= "Census_ID", all.x = TRUE)
+sf_jobs$emp_density = sf_jobs$estimate/sf_jobs$Area
+
+```
+
+Plotting the job density against bike stations in the city. 
+
+```{r message = FALSE, warning = FALSE}
+p2 = ggplot(sf_jobs) + geom_sf(aes(fill=emp_density))+ geom_sf(data = bike_stations, size = 1, 
+                                     shape = 23, fill = "yellow") +th
+p2 = p2 +labs(title = "Distribution of bike stations a/c to employment") +
+      scale_fill_viridis_c()
+p2
+
+```
+
+
+This map helps us understand that most of the rides are concentrated in regions with medium-high employment densities.   
+
+An interesting observation would be to see how many of these bike rides help with first/last mile connectivity to transit stops. In this project, we have chosen Passenger Rail stops in San Francisco which includes several modes such as Muni Metro, BART, Caltrain,etc. Bus stations have not been considered at this point because bus stations change from time to time and are not permanent.   
+
+First we load the shapefile for Passenger Rail stations in the bay area and convert it to a raster file. This data has been taken from the Metropolitan Transportation Commission website. 
+```{r message= FALSE, warning=FALSE}
+#Load the shape file for transit stops in California 
+s1 = "Passenger_Rail_Stations__2019_.shp"
+v1 = raster:: shapefile(s1)
+
+```
+
+To see how many bike rides help increase Rail ridership, we have drawn a circle of 200m around each rail station and cropped the output for the extent of San Francisco. 
+
+```{r message= FALSE, warning=FALSE}
+b= buffer(v1,200, dissolve=FALSE)
+b=vect(b)
+
+stops <- terra::project(b, "+proj=longlat +datum=WGS84")
+stops = crop(stops, ext(neigh))
+
+x = stops
+x$OBJECTID=NULL
+stops1 = unique(x)
+
+plot(sf, main = "Buffer around passenger rail stations ")
+plot(stops1,add=TRUE,col="red")
+
+```
+
+We can then calculate the  number of bike rides traveling to and from these areas by extracting all the bike rides that fall within this buffer.
+
+```{r message=FALSE, warning= FALSE}
+
+bike_start_transit = terra:: extract(bike_start,stops1)
+transit_start_count = as.data.frame(table(bike_start_transit$station_na))
+
+ 
+bike_end = vect(bike, c("end_station_longitude", "end_station_latitude"))
+bike_end = crop(bike_end,ext(neigh))
+bike_end_transit = terra:: extract(bike_end,stops1)
+transit_end_count = as.data.frame(table(bike_end_transit$station_na))
+
+```
+We see that many of the bikerides provide access to transit.(There could be duplicates)
+
+Which are the top 5 rail stations that have maximum number of rides ending at them? This means these stations were accessed the most with bikeshare rides 
+
+```{r message= FALSE, warning=FALSE}
+transit_end_count = transit_end_count[order(-transit_end_count$Freq),]
+head(transit_end_count)
+
+```
+
+At look at the map of San Francisco shows that most of these stations are in or closer to the Downtown. 
+
+### Part 2 Regression Analysis
+
+In the second part of our project, we look into census tract level data in San Francisco and select a number of socioeconomic and built environment characteristics. We then explore how these variables might be associated with the number of bikeshare trips in each census tract. We study the trend of bikesharing compared to factors such as median income of each census tract, median age, racial profiles, employment levels, population density, etc. Qian and Jaller(2020) [1] find that low-income populations and people of colour are not highly representative of the bikeshare users' profile. We seek to explore if this is also the case in San Francisco. One important factor to consider is who the bikeshare users are. Since 80% of the users are subscribers (shown earlier), we may infer that majority of the users are residents and not tourists. We are also curious about which census tract level socioeconomic and built environment variables best explain the variation in bikeshare usage. We explore two techniques - Ordinary Least Square (OLS) regression and the Random Forest model.
+
+We start this part of our project by importing data for our analysis. This step is done almost entirely through R's tidycensus package. In the next segment, we clean and arrange the data to make it ready for analysis. 
+
+Next, we use ggplots to develop various kinds of graphs. These are helpful in providing a visualization of what our data looks like and gives us some basic correlations. It is an insightful first step to look at what factors might be causing bikeshare trips. 
+
+Finally, we explore two predictive models, OLS regression and random forest. Ordinary least squares (OLS) regression is a statistical method of analysis that estimates the relationship between one or more independent variables and a dependent variable. In our case, the dependent variable is the number of bikeshare trips per 1000 persons. The unit of analysis is the census tract. The OLS method estimates the relationship by minimizing the sum of the squares in the difference between the observed and predicted values of the dependent variable configured as a straight line. The regression model therefore enforces linearity where there might not be such a relationship. Of course, there are techniques within regression that allow for non-linearity such as log-lin and lin-log models, quadratic equations etc. However for this assignment we are only considering linear OLS. 
+
+In the Machine Learning world, Random Forest models are a kind of non parametric models that can be used both for regression and classification. A random forest is an ensemble of many individual decision trees. Although Random Forest models don’t offer as much interpretability as a single tree, their performance is a lot better and they have higher predictive powers, and perfectly tuning the parameters of the forest is not  a major concern as it is with individual trees. Random forest models however do suffer from being over fitted. 
+
+Towards the end of this project, we use our dataset to compare these two methods. This was an exciting area for us to explore. The two techniques have their own advantages and disadvantages, and one should be careful while comparing the two. OLS regressions generally require careful inspection of the data at hand. However, we came up with some interesting results at the end. We investigate the accuracy of the two models by drawing comparisons between their RMSE. The final outcome of this section was rather surprising, but of course not generalizable. 
+
+
+#### Importing Data for Regression and Descriptive Statistics
+Next, we install the census API key, This, along with the tidycensus package will allow us to import Census data directly into R. 
+
+```{r message= FALSE, warning=FALSE}
+f.name <- "variable2019.csv"
+if(!file.exists(f.name)){
+  census_api_key("f73e13d1f799d36d0da618854281e24193b8d296", overwrite = TRUE)
+  f <- load_variables(year = 2019, dataset = "acs5")
+  write.csv(f, f.name)
+}else{
+  f <- read.csv(f.name)
+}
+```
+
+Creating a vector of the variables needed for the analysis. Since the age variable has many subcomponents in the census data, a vector for the age variable is created  separately in the next step.
+```{r message= FALSE, warning=FALSE}
+v <- c("B19013_001", "B02001_001", "B02001_002", "B02001_003", "B02001_004", "B02001_005", "B02001_006", "B02001_007", "B02001_008","B03001_003", "B08014_002", "B08014_003",
+"B08014_004", "B08014_005", "B08014_006", "B08014_007", "B01001_001", "B17020_002", "B23025_004", "B23025_006", "B23025_005", "B25001_001", "B01002_001")
+```
+
+Next, we use get_acs to obtain data from the American Community Survey by specifying the geographical unit, county, variables, state and year of the data required.
+```{r message= FALSE, warning=FALSE}
+df <- get_acs(geography = "tract", county ="San Francisco", variables= v, state ="CA", year = 2019)
+```
+
+Here, we define codes for data on age brackets for males and females
+```{r message= FALSE, warning=FALSE}
+
+male <- c("B01001_003", "B01001_004", "B01001_005", "B01001_006", "B01001_007", "B01001_008", "B01001_009", "B01001_010", "B01001_011", "B01001_012", "B01001_013", "B01001_014", "B01001_015", "B01001_016", "B01001_017", "B01001_018", "B01001_019", "B01001_020", "B01001_021", "B01001_022", "B01001_023", "B01001_024", "B01001_025")
+
+female <- c("B01001_026", "B01001_027", "B01001_028", "B01001_029", "B01001_030", "B01001_031", "B01001_032", "B01001_033", "B01001_034", "B01001_035", "B01001_036", "B01001_037", "B01001_038", "B01001_039", "B01001_040", "B01001_041", "B01001_042", "B01001_043", "B01001_044", "B01001_045", "B01001_046", "B01001_047", "B01001_048")
+```
+
+Create dataframe with age variables for male and female
+```{r message= FALSE, warning=FALSE}
+male <- get_acs(geography = "tract", county ="San Francisco", variables= male, state ="CA", year = 2019)
+female <- get_acs(geography = "tract", county ="San Francisco", variables= female, state ="CA", year = 2019)
+```
+
+
+#### Arrange and Clean Data
+Once the data is downloaded, we arrange it in a dataframe such that the regression analysis and plotting of graphs is easy. Some variables are removed while some latent variables are created using the original data.
+
+Some columns contain data which is not needed for the analysis - this is deleted.
+```{r message= FALSE, warning=FALSE}
+male$moe=NULL
+female$moe=NULL
+df$moe=NULL
+```
+
+Convert df to wide format.
+```{r message= FALSE, warning=FALSE}
+df1 <- pivot_wider(df, names_from=variable, values_from=estimate)
+```
+
+Rename Race and Population variables
+```{r message= FALSE, warning=FALSE}
+df1 <- df1 %>%
+  rename(
+    population=B01001_001,
+    race_white=B02001_002,
+    race_black=B02001_003,
+    race_hispanic=B03001_003
+  )
+```
+
+Create new variable for all races other than white, African American and Hispanic. Call it race_others
+```{r message= FALSE, warning=FALSE}
+df1$race_others <- df1$population-df1$race_white - df1$race_black - df1$race_hispanic
+```
+
+Drop all other race variables which we do not need for the analysis
+```{r message= FALSE, warning=FALSE}
+df1$B02001_001=NULL
+df1$B02001_004=NULL
+df1$B02001_005=NULL
+df1$B02001_006=NULL
+df1$B02001_007=NULL
+df1$B02001_008=NULL
+```
+
+Rename remaining variables
+```{r message= FALSE, warning=FALSE}
+df1 <- df1 %>%
+  rename(no_vehicles=B08014_002,
+         one_vehicle=B08014_003,
+         two_vehicle=B08014_004,
+         three_vehicle=B08014_005, 
+         four_vehicle=B08014_006,
+         five_vehicle=B08014_007,
+         poverty=B17020_002,
+         med_income=B19013_001,
+         employed_clf=B23025_004,
+         employed_af=B23025_006,
+         unemployed=B23025_005,
+         housing_units=B25001_001,
+         age_med=B01002_001
+  )
+```
+
+The census tract variables currently has more information than just the number. For instance, it says 'Census Tract 101, San Francisco County, California'. The census tract variable will later be used to merge the dataframe with other dataframes containing information on bikeshare origins and destination. Therefore, the census tract variable is mutated to ensure that it has no information other than the number itself. 
+```{r message= FALSE, warning=FALSE}
+df1 <- df1 %>%
+  mutate(NAME = str_remove_all(NAME, ", San Francisco County, California"),
+  ) %>%
+  mutate(NAME = str_remove_all(NAME, "Census Tract "))
+```
+
+Rename tract column 
+```{r message= FALSE, warning=FALSE}
+df1 <- df1 %>%
+  rename(tract=NAME)
+```
+
+Read area file to create density variables like population density and rewrite census tract names so that they only have tract number in the area file
+```{r message= FALSE, warning=FALSE}
+a <- "Census_Area.csv"
+area <- read.csv(a)
+area <- area %>%
+  mutate(Census_tract = str_remove_all(Census_tract, "Census Tract "))
+```
+
+
+Rename census tract variable to match with df1
+```{r message= FALSE, warning=FALSE}
+area <- area %>%
+  rename(tract=Census_tract)
+```
+
+Merge area file with df1 and remove unwanted variables. The new merged file is called dat.
+```{r message= FALSE, warning=FALSE}
+dat <- merge(df1, area, by="tract")
+dat$X=NULL
+```
+
+Create new variables including total employment, employment rate, poverty level, population density, housing density, percentage of households without vehicles, proportion of white persons, African American persons, Hispanic persons and people of other races.    
+```{r message= FALSE, warning=FALSE}
+dat$emp_total <- dat$employed_clf + dat$employed_af
+dat$pov_rate <- (dat$poverty*100)/dat$population
+dat$emp_rate <- (dat$emp_total*100)/dat$population
+dat$popdensity <- dat$population/dat$Area
+dat$housdensity <- dat$housing_units/dat$Area
+dat$no_veh_perc_hh <- (dat$no_vehicles*100)/dat$housing_units
+dat$white_prop <- (dat$race_white*100)/dat$population
+dat$black_prop <- (dat$race_black*100)/dat$population
+dat$otherrace_prop <- (dat$race_others*100)/dat$population
+dat$hisp_prop <- (dat$race_hispanic*100)/dat$population
+```
+
+Rename and Merge bikeshare origins and destinations data with census data
+```{r message= FALSE, warning=FALSE}
+g <- "Census_origins_sep.csv"
+d <- "Census_destinations_sep.csv"
+```
+
+Read origins and destinations data and delete the variables we do not need for analysis.
+```{r message= FALSE, warning=FALSE}
+origins <- read.csv(g)
+dest <- read.csv(d)
+origins$X=NULL
+dest$X=NULL
+```
+
+Rename the tract variable in origins and destinations to match with dat. 
+```{r message= FALSE, warning=FALSE}
+origins <- origins %>%
+  rename(tract=Var1,
+         trips_o=Freq
+         )
+
+dest <- dest %>%
+  rename(tract=Var1,
+         trips_d=Freq
+          )
+```
+
+Rewrite census tract values in O and D so that they only have tract number
+```{r message= FALSE, warning=FALSE}
+origins <- origins %>%
+  mutate(tract = str_remove_all(tract, "Census Tract "))
+
+dest <- dest %>%
+  mutate(tract = str_remove_all(tract, "Census Tract "))
+```
+
+Merge origins and destinations with data file
+```{r message= FALSE, warning=FALSE}
+dat <- merge(dat, origins, by="tract", all=TRUE)
+dat <- merge(dat, dest, by="tract", all=TRUE)
+```
+
+Change NA value in trips data to zero
+```{r message= FALSE, warning=FALSE}
+dat$trips_o[is.na(dat$trips_o)] = 0
+dat$trips_d[is.na(dat$trips_d)] = 0
+```
+
+The data containing age brackets (male and female) is in long format, convert to wide format.
+```{r message= FALSE, warning=FALSE}
+male <- pivot_wider(male, names_from=variable, values_from=estimate)
+female <- pivot_wider(female, names_from=variable, values_from=estimate)
+```
+
+Rewrite census tract values in male and female and so that they only have tract number. This is necessary so that we can merge with dat.
+```{r message= FALSE, warning=FALSE}
+male <- male %>%
+  mutate(NAME = str_remove_all(NAME, ", San Francisco County, California"),
+  )%>%
+  mutate(NAME = str_remove_all(NAME, "Census Tract "))
+
+female <- female %>%
+  mutate(NAME = str_remove_all(NAME, ", San Francisco County, California"),
+  )%>%
+  mutate(NAME = str_remove_all(NAME, "Census Tract "))
+```
+
+Remove the variables we do not need
+```{r message= FALSE, warning=FALSE}
+male$B01001_003=NULL
+male$B01001_004=NULL
+female$B01001_026=NULL
+female$B01001_027=NULL
+female$B01001_028=NULL
+```
+
+Create age brackets - combined for both genders. (The male dataset will have age brackets for both genders)
+```{r message= FALSE, warning=FALSE}
+male$age10_19 <- male$B01001_005+male$B01001_006+male$B01001_007 +female$B01001_029+female$B01001_030+female$B01001_031
+male$age20_34 <- male$B01001_008+male$B01001_009+male$B01001_010 + male$B01001_011 +male$B01001_012 +female$B01001_032+female$B01001_033+female$B01001_034+female$B01001_035+female$B01001_036
+male$age35_50 <- male$B01001_013+male$B01001_014+male$B01001_015 + female$B01001_037+female$B01001_038+female$B01001_039
+male$age50_64 <- male$B01001_016+male$B01001_017+male$B01001_018 + male$B01001_019 + female$B01001_040+female$B01001_041+female$B01001_042+female$B01001_043    
+male$age20_40 <- male$B01001_008+male$B01001_009+male$B01001_010 + male$B01001_011 +male$B01001_012 +male$B01001_013+female$B01001_032+female$B01001_033+female$B01001_034+female$B01001_035+female$B01001_036++female$B01001_037
+male$age20_50 <- male$age20_34 + male$age35_50
+```
+
+Rename the age bracket variables. The variable 'age20_34' has all persons within the age bracket of 20 to 34 years. 
+```{r message= FALSE, warning=FALSE}
+age <- male[, c("NAME", "age10_19", "age20_34", "age35_50", "age50_64", "age20_40", "age20_50")]
+```
+
+Rename census tract variable
+```{r message= FALSE, warning=FALSE}
+age <- age %>%
+  rename(tract=NAME)
+```
+
+Merge age (dataframe with age brackets) with data
+```{r message= FALSE, warning=FALSE}
+dat <- merge(dat, age, by="tract")
+```
+
+
+#### Descriptive Statistics
+Now that our dataset is ready to be analyzed, we begin the exploration process. We create several graphs to analyze the trend of bikeshare rides (origins) with respect to various tract level characteristics such as median income, median age, etc. For all plots, we use the ggplot function. To create meaningful plots, we make a few adjustments.
+
+Remove rows with zero bikeshare rides
+```{r message= FALSE, warning=FALSE}
+dat <- dat%>%
+    filter(dat$trips_o!= 0)
+```
+
+Create new variables for Bikeshare Rides per 1000 Persons and % of young population (age 20 - 40) in each census tract
+```{r message= FALSE, warning=FALSE}
+dat$trips_o_dens <- (dat$trips_o*1000)/dat$population
+dat$young_perc <- (dat$age20_40*100)/dat$population  
+```
+
+Identify and drop outliers 
+```{r message= FALSE, warning=FALSE}
+i <- which(dat$trips_o_dens > quantile(dat$trips_o_dens, probs = c(0.95)))
+i
+dat <- dat[-i, ]
+```
+
+We can now start creating our plots. For this exercise, the dependent variable is bikeshare trips per 1000 persons (sometimes called bikeshare trip density). The independent variables that we explore for the ggplots include percentage of young persons in the tract, median income (simple and quintiles), median age (split by income quintiles), population density, the proportion of households without vehicle ownership and race. 
+
+##### Plot for Age and Bikeshare
+
+```{r message= FALSE, warning=FALSE}
+
+#Create histogram for age and bikeshare trips density
+plot4 <- ggplot(data=dat, aes(x=young_perc, y=trips_o_dens))+
+  geom_bar(stat="identity", 
+           width=0.4, 
+           fill="#00878e")+
+  geom_smooth(method="lm", 
+              col = "#872657", 
+              alpha=0.25)+
+  theme_bw()+
+  labs(x="% of Young Population (20 - 40 years)",
+       y="Bikeshare Trips per 1000 Population",
+       title="Bikeshare Trips against % of Young Age Population")+
+  coord_cartesian(ylim = c(0, 1800)) 
+
+plot4
+```
+
+As expected, the bar chart above shows that bikeshare trip density is on average positively associated with the percentage of young persons in the census tract. We look at this variable in some deeper detail in the next section.
+
+##### Income and Bikeshare
+
+```{r message= FALSE, warning=FALSE}
+#Simple Plot of Bikeshare Trips against Median Income
+plot5 <- ggplot(data=dat, aes(x=med_income, y=trips_o_dens))+
+  geom_point(pch=18, 
+             colour="#00009C", 
+             size=2.5, 
+             alpha=0.8)+
+  geom_smooth(method="lm", 
+              col = "#CD2990", 
+              alpha=0.3)+
+  theme_bw()+
+  labs(x="Median Income of Census Tract",
+       y="Bikeshare Trips per 1000 Population",
+       subtitle="Scatterplot")
+
+plot5
+
+#Create a function to make quintiles 
+quant <- function(x){
+  breaks=quantile(x, probs = c(0, 0.2, 0.4, 0.6, 0.8))
+  findInterval(x, breaks)
+}
+
+#Remove missing values
+sum(is.na(dat))
+dat <- dat[!is.na(dat$med_income), ]
+
+#Make quintiles for several variables of which we use income quintiles for plot 6
+quintiles <- dat %>%
+  mutate(across(c(trips_o, trips_o_dens, med_income, age_med, housdensity, no_veh_perc_hh), quant))
+
+quintiles1 <- quintiles %>%
+  select(GEOID, tract, trips_o,trips_o_dens, med_income, age_med, housdensity, no_veh_perc_hh)
+
+quintiles1$trips_o_densold <- dat$trips_o_dens 
+
+
+
+#Income and bikeshare plot using quintiles
+plot6 <- ggplot(data=quintiles1, aes(x=med_income, y=trips_o_densold))+
+  geom_count(col="#7A378B", 
+             size=3, 
+             alpha = 0.5)+
+  labs(subtitle="Count Plot",
+       x="Median Income (Quintiles)",
+       y="")+
+  geom_smooth(method="lm", 
+              col="#D02090", 
+              se=FALSE)+
+  geom_ribbon(stat = "smooth",
+              method = "lm",
+              se = TRUE,
+              alpha = 0.075,
+              colour = "black",
+              linetype = "dashed")+
+  theme_bw()
+plot6
+
+#Arranging income plots together
+grid.arrange(plot5, plot6, nrow=1, top="Bikeshare Trip Density against Median Income")
+```
+
+The two graphs show the same story in different ways. Median income and bikeshare trip density are positively related on average. The quintiles graph on the right (Count plot) has the added advantage of neatly packing the observations into income groups. It is apparent in the Count Plot that even though on average the two variables are positively correlated, there may be a slight U-shape in this relationship. 
+
+##### Bikeshare by median age, split by income groups
+
+```{r message= FALSE, warning=FALSE}
+#Labelling plot 7 according to income groups
+new_labels <- paste("Income Quintile", 1:5)
+names(new_labels) <- 1:5
+new_labels
+
+
+plot7 <- ggplot(data=quintiles1, aes(x=age_med, y=trips_o_densold))+
+  geom_count(col="#7A378B", 
+             size=2, 
+             alpha = 0.8)+
+  labs(main="Bikeshare Trip Density against Quintiles of Median Income",
+       subtitle="Count Plot",
+       x="Median Age (Quintiles)",
+       y="Bikeshare Trips per 1000 Population")+
+  geom_smooth(method="lm", 
+              col="#D02090", 
+              se=FALSE)+
+  geom_ribbon(stat = "smooth",
+              method = "lm",
+              se = TRUE,
+              alpha = 0.075,
+              colour = "black",
+              linetype = "dashed")+
+  theme_bw()
+plot7
+
+plot7 + theme(strip.background = element_rect(fill="#FFF0F5", size = 1, color = "#B0A6A4"))+
+  facet_wrap( ~ med_income, labeller = labeller(med_income = new_labels))
+```
+
+This graph splits the sample into income groups and then compares the association between median age and bikeshare trips per 1000 persons across income groups. It is interesting to note that age and bikeshare density seem unrelated for the first three income groups. For the last two (higher) income groups, median age and bikeshare density are negatively correlated (as expected).
+
+##### Bikeshare and Population Density
+
+```{r message= FALSE, warning=FALSE}
+
+plot8 <- ggplot(data=dat, aes(x=popdensity, y=trips_o_dens, color=trips_o_dens))+
+  geom_point(pch=19, 
+             size=3)+
+  theme_bw()+
+  scale_color_gradient(low="#00BFFF",
+                       high="#000080",
+                       name = "Bikeshare Trips per 1000")+
+  labs(x="Population Density of Census Tract",
+       y="Bikeshare Trips per 1000 Population",
+       title="Bikeshare Trips against Population Density")+
+  geom_smooth(method="lm", 
+              col="#FF7722", 
+              se=FALSE)+
+  geom_ribbon(stat = "smooth",
+              method = "lm",
+              se = TRUE,
+              alpha = 0.075,
+              colour = "black",
+              linetype = "dashed")+
+  coord_cartesian(ylim = c(0, 1800)) 
+
+plot8
+```
+
+This give a rather surprising result as one would expect bikeshare trips density to be positively related to population density. However, Plot 8 tells a different tale. More on this later.
+
+##### Bikeshare and Vehicle Ownership
+
+```{r message= FALSE, warning=FALSE}
+#Explore the link between bikeshare and vehicle ownership
+
+plot9 <- ggplot(data=dat, aes(x=no_veh_perc_hh, y=trips_o_dens))+
+  geom_point(pch=9, 
+             size=2.5,
+             bg="#8B8378")+
+  theme_bw()+
+  labs(x="% of Households with No vehicles",
+       y="Bikeshare Trips per 1000 Population",
+       title="Bikeshare Trips against Vehicle Ownership")+
+  scale_fill_discrete(name = "Bikeshare Trips per 1000")+
+  geom_smooth(method="lm", 
+              col="#8B0000", 
+              se=FALSE)+
+  geom_ribbon(stat = "smooth",
+              method = "lm",
+              se = TRUE,
+              alpha = 0.075,
+              colour = "#8B8378",
+              linetype = "dashed")
+
+plot9
+```
+
+As expected, bikeshare trip density increases as the percentage of households in a census tract without a vehicle goes up. Bikeshare services were once thought of as a one off fun experience, but are now used as a mode of transport by some individuals.  
+
+##### Bikeshare by Race
+
+```{r message= FALSE, warning=FALSE}
+#Use the quant function created earlier to get quintiles for 4 racial groups, namely white, African American, Hispanic and Other Races
+
+quintrace <- dat %>%
+  mutate(across(c(trips_o, trips_o_dens, white_prop, black_prop, hisp_prop, otherrace_prop), quant))
+
+quintraces1 <- quintrace %>%
+  select(GEOID, tract, trips_o,trips_o_dens, white_prop, black_prop, hisp_prop, otherrace_prop)
+
+quintraces1$t <- dat$trips_o_dens 
+
+#White
+plot10 <- ggplot(data=quintraces1, aes(x=white_prop, y=t))+
+  geom_count(col="blue", 
+             size=2, 
+             alpha = 0.8)+
+  labs(title="White",
+       x="% White Persons (Quintiles)",
+       y="")+
+  geom_smooth(method="lm", 
+              col="black", 
+              se=TRUE,
+              alpha=0.25)+
+  theme_bw()+
+  theme(plot.title = element_text(size=10),
+        axis.title.x = element_text(size=9))
+plot10
+
+#African American
+
+plot11 <- ggplot(data=quintraces1, aes(x=black_prop, y=t))+
+  geom_count(col="dark green", 
+             size=2, 
+             alpha = 0.8)+
+  labs(title="African American",
+       x="% African American Persons (Quintiles)",
+       y="")+
+  geom_smooth(method="lm", 
+              col="black", 
+              se=TRUE,
+              alpha=0.25)+
+  theme_bw()+
+  theme(plot.title = element_text(size=10),
+        axis.title.x = element_text(size=9))
+plot11
+
+
+#Hispanic
+
+plot12 <- ggplot(data=quintraces1, aes(x=hisp_prop, y=t))+
+  geom_count(col="maroon", 
+             size=2, 
+             alpha = 0.8)+
+  labs(title="Hispanic",
+       x="% Hispanic Persons (Quintiles)",
+       y="")+
+  geom_smooth(method="lm", 
+              col="black", 
+              se=TRUE,
+              alpha=0.25)+
+  theme_bw()+
+  theme(plot.title = element_text(size=10),
+        axis.title.x = element_text(size=9))
+plot12
+
+#Other races
+
+plot13 <- ggplot(data=quintraces1, aes(x=otherrace_prop, y=t))+
+  geom_count(col="#CDAD00", 
+             size=2, 
+             alpha = 1.1)+
+  labs(title="All Other Races",
+       x="% Other Races (Quintiles)",
+       y="")+
+  geom_smooth(method="lm", 
+              col="black", 
+              se=TRUE,
+              alpha=0.25)+
+  theme_bw()+
+  theme(plot.title = element_text(size=10),
+        axis.title.x = element_text(size=9))
+
+plot13
+
+#Arranging race plots together
+grid.arrange(plot10, plot11, plot12, plot13, nrow=2, ncol=2, top="Bikeshare Trip Density by Race", left="Bikeshare Trips per 1000 Population")
+
+```
+
+##### Random Forest vs Regression Analysis using Bikeshare Dataset
+
+We start by creating a new dataframe with non-overlapping independent variables. This step is necessary to obtain a meaningful output in the random forest estimation.
+
+```{r message= FALSE, warning=FALSE}
+dat1 <- dat %>%
+  select(trips_o_dens, age_med, med_income, emp_rate, popdensity, housdensity, no_veh_perc_hh, white_prop, black_prop, otherrace_prop, hisp_prop, young_perc)
+```
+
+Next, we run a random forest to get an idea about which variables are the most important ones with respect to the density of bikeshare trips i.e. bikeshare trips per 1000 persons.
+
+```{r message= FALSE, warning=FALSE}
+rf <- randomForest(dat1[, colnames(dat1)!="trips_o_dens"], dat$trips_o_dens, mtry=3, importance=TRUE, na.action=na.omit)
+```
+
+We can a run a few functions to observe the random forest output. The print(rf) function tells us that this model explains 27.92% of the variance. The varImpPlot reveals which variables are the most 'important' ones or the ones that best explain the density of bikeshare trips in San Francisco. 
+
+```{r message= FALSE, warning=FALSE}
+print(rf)
+varImpPlot(rf, type=2)
+```
+
+According to the output above, the top 5 important variables (in order) that best capture the variation in density of bikeshare trips are population density, median income, percentage of households without cars, housing density and the percentage of young persons (aged between 20 and 40 years). Racial profiles tend to be less significant. Moreover, the employment rate and median age in the census tract are not that important for bikeshare trips. These are interesting findings. Since the variable in question is bikeshare (single person use), it makes sense that population density would play a much bigger role as compared to housing density. We dig a little further into the three most important variables - population density, median income and percentage of households without cars.
+
+To further explore the relationship of the three most important variables with bikeshare trips density, we create partial plots. The partial plot with respect to population density is as follows
+```{r message= FALSE, warning=FALSE}
+
+par(mfrow = c(1,2))
+pp_popden <- partialPlot(rf, dat1, "popdensity")
+d <- boxplot((dat1$popdensity), main= "Population Density")
+```
+
+In Plot 8 (earlier), we saw that population density is negatively related to bikeshare trip density. The partial plot gives us similar insight along with some extra and important details. Higher population density leads to more bikeshare trips, but this only holds true up until a population density of slightly over 20,000, after which population density no longer matters in explaining. The boxplot on the right shows the distribution of population density. We can use the quantile() function to find out further how the data is distributed. 
+
+```{r message= FALSE, warning=FALSE}
+quantile(dat1$popdensity)
+```
+
+To know how many observations have a population density greater than 20,000 we run
+```{r message= FALSE, warning=FALSE}
+which(dat1$popdensity>20000)
+```
+
+Therefore, 8 tracts have a population density greater than 20,000.
+
+Median income is the second most important variable. According to the scatterplot and count plot created earlier (plots 5 and 6), median income and bikeshare trips density are positively correlated. We look at the partial plot
+
+```{r message= FALSE, warning=FALSE}
+
+par(mfrow = c(1,2))
+pp_inc <- partialPlot(rf, dat1, "med_income")
+d <- boxplot((dat1$med_income), main= "Median Income")
+```
+
+According to the partial plot, the dependence of bikeshare trips on income is slightly decreasing for lower income groups but then becomes sharply increasing for upper income groups. The mid-section is mostly flat.  
+
+
+The third most important variable is the percentage of households without a vehicle. We make the partial plot
+
+```{r message= FALSE, warning=FALSE}
+par(mfrow = c(1,2))
+pp_no_veh <- partialPlot(rf, dat1, "no_veh_perc_hh")
+d <- boxplot((dat1$no_veh_perc_hh), main= "Prop HH without Vehicle")
+```
+
+This may appear to be a contradiction. On the one hand, higher income and trip density are positively related, and on the other hand areas with a larger proportion of car-less homes are also more likely to use bikeshare. The very steep and abrupt jump at 40% is a fascinating feature of the data. For tracts with less than 40% households without a car, the proportion of such households seems to have a positive effect on bikeshare trips. There is a sharp increase in bikeshare trips beyond that. Perhaps this may be attributed to bikeshare companies being more likely to set up infrastructure in areas that are less car-centric and more bike-friendly.
+
+Next, we find the predicted values of the random forest model.
+
+```{r message= FALSE, warning=FALSE}
+p <- predict(rf)
+```
+
+
+Finally, we look at a plot comparing the predicted vs actual values of the random forest model
+```{r message= FALSE, warning=FALSE}
+plot(dat1$trips_o, p, xlab="observed", ylab="predicted", xlim=c(0,5000), ylim=c(0,5000))
+abline(0,1)
+```
+
+The partial plot may be misleading as it considers the impact of one independent variable such median age on bikeshare trips in isolation of all other variables. Hence in the presence of interactions the partial plot may not be the best approach. If features of a machine learning model are correlated, the partial dependence plot cannot be trusted. ALE (Accumulated Local Effects) plots can account for interactions. ALEPlots describe how features influence the prediction of a machine learning model on average. ALE plots are a faster and unbiased alternative to partial dependence plots [2].
+
+For the ALEPlot, we start by defining the following predictive function. We also create a new dataframe pdata with no missing values. 
+```{r message= FALSE, warning=FALSE}
+pf <- function(X.model, newdata){
+  predict(X.model, newdata)
+}
+
+pdata <- na.omit(dat1)
+```
+
+Next, we create the ALEPlot for Population density:
+```{r message= FALSE, warning=FALSE}
+aleplot <- ALEPlot(pdata, rf, pf, J=which(colnames(dat1)=="popdensity"), K=30)
+```
+
+ALEPlot for Median Income:
+```{r message= FALSE, warning=FALSE}
+aleplot <- ALEPlot(pdata, rf, pf, J=which(colnames(dat1)=="med_income"), K=30)
+```
+
+ALEPlot for Percentage of Households with no Vehicles:
+```{r message= FALSE, warning=FALSE}
+aleplot <- ALEPlot(pdata, rf, pf, J=which(colnames(dat1)=="no_veh_perc_hh"), K=30)
+```
+
+The ALEPlots are generally smoother than the partial plots.
+
+We now run a regression on Bikeshare trips (origins)
+
+```{r message= FALSE, warning=FALSE}
+model1 <- lm(trips_o_dens ~ ., data=dat1)
+summary(model1)
+```
+
+Use the backward AIC
+```{r message= FALSE, warning=FALSE}
+step(model1, direction= "backward")
+```
+
+Based on the result, we make our regression model. (Note: since this is a data science project, we did not invest a lot of time on theoretical underpinnings of this regression model),
+```{r message= FALSE, warning=FALSE}
+reg <- lm(formula = trips_o_dens ~ age_med + med_income + emp_rate + 
+    popdensity + housdensity + no_veh_perc_hh + white_prop + 
+    young_perc, data = dat1)
+
+summary(reg)
+```
+
+The regression model has an R squared on 0.5093 and all the variables are significant. The signs of the coefficients are in line with the random forest output (for the three variables considered).
+
+As a final step, we compare the RMSE produced by the random forest model and the regression model. We start by creating a variable k which has 5 samples of the dataset. 
+
+```{r message= FALSE, warning=FALSE}
+set.seed(5)
+k <- sample(5, nrow(dat), replace=TRUE)
+k
+```
+
+We now define a function called rmse, which takes the difference for each observed and predicted value. This function is used in the next step to find the RMSE of the regression and random forest model for different samples so increase the accuracy of our findings. 
+
+```{r message= FALSE, warning=FALSE}
+rmse <- function(obs, pred){
+  sqrt(mean((obs-pred)^2))
+}
+```
+
+We now create a loop for k-fold RMSE. r1 provides the RMSE of the regression model whereas r2 gives the RMSE of the random forest model. In this final step, we create two groups of the dataset called train and test. The train set is used to run the model and the test set is used to predict its accuracy. The for loop allows for this process to run 5 times for each model, so we end up with 5 RMSE values for each.  
+```{r message= FALSE, warning=FALSE}
+r1 <- r2 <- rep(NA, 5)
+for(i in 1:5){
+  test <- dat[k==i, ]
+  train <- dat[k!=i, ]
+  reg <- lm(formula = trips_o_dens ~ age_med + med_income + emp_rate + 
+    popdensity + housdensity + no_veh_perc_hh + white_prop + 
+    young_perc, data = dat1)
+   
+  p <- predict(reg, test)
+  
+  r1[i] <- rmse(test$trips_o_dens, p)
+  
+  rf <- randomForest(trips_o_dens ~  white_prop + black_prop+ hisp_prop + no_veh_perc_hh + housdensity + med_income +
+                                emp_rate + age_med + age20_40 + young_perc, data=train, mtry=3, importance=TRUE, na.action=na.omit)
+  test <- na.omit(test)
+  p <- predict(rf, test)
+  r2[i] <- rmse(test$trips_o_dens, p)
+}
+```
+
+RMSE of Regression model
+```{r message= FALSE, warning=FALSE}
+r1
+mean(r1)
+```
+
+RMSE of Random Forest
+```{r message= FALSE, warning=FALSE}
+r2
+mean(r2)
+```
+
+### Conclusion
+
+Bikeshare systems can be a very useful solution to today's traffic problems. This project helped us gain interesting insights into the Bikeshare data of San Francisco. In the first part of the project, we explore the bikeshare data of Baywheels for San Francisco in the third quarter of 2019. The data shows that the number of rides are higher on the weekdays than on weekends and the service is mostly used by subscribers than casual customers. There is a distinct morning peak from 7AM to 10AM and a evening peak from 3PM to 7PM. The average ride duration is around 14 minutes. 
+
+Spatial Data Analysis showed that most of the bikeshare stations and rides are concentrated in the non-hilly, non-residential neighborhoods with high employment densities. And that many of the rides help in first/last mile connectivity to transit. 
+
+In the second part of the project, we worked on regression and machine learning methods. As seen above, the mean RMSE of the regression model (232.33) is lower than the RMSE of the random forest model (298.48). This was a surprising result for us given that the random forest goes through a series of iterations which should make it more accurate. Our result is in no way generalisable, but investigating this dataset led to many questions and avenues for further examination. The results and experience gained from this project open up doors for further exploration into modeling, especially machine learning, an area that neither of us have much learning on.
+
+Among the many major lesson learned is that the random forest model plots such as  aleplots and partial plots can be very helpful in understanding the nature of the relationship between dependent and independent variables. Sometimes it is tricky  to tell if the variable is linearly or quadratically related to y. The random forest can very well be used as a first step into understanding what the data looks like, and can prepare one to write out meaningful regression models. For instance, we found that only values of population density that are less than 20,000 impact bikeshare trip density; values above that do not seem to have an impact. This information can be used to create a binary variable for population density <20000 and population density>20000, which can then be used in regression models.   
+
+#### Some weaknesses of our project 
+
+Since this project is just a starting point in our experience with data science, there are a few shortcomings in the analysis we would like to take note of. 
+
+1. It is rather unusual to see that most of the bikeshare stations and rides are concentrated in few areas of the city. Maybe correcting for factors such as access to bikeshare can help us understand the reasons behind it. 
+
+2. Instead of calculating the closest transit station from a bikeshare start/end point, we drew a 200m buffer around each station to count the number of rides that helped with first/last mile connectivity to transit. This has led to overlapping of transit station buffers and one ride being counted for more than one transit station. 
+
+3. Transport planners usually do not use census tracts as the geographical unit of analysis. Rather, they create transport analysis zones (TAZs) which combine areas with similar income/ population/ employment distributions. We used census tracts for simplification in this project. 
+
+4. More data on  built environment could have made our research richer. The number of schools and parks in an area would be worthy attributes to consider. 
+
+Nevertheless this project helped us a lot to explore different areas of data science, regression and machine learning and would be a good starting point for further research. 
+
+
+### References
+
+1. Qian, X., & Jaller, M. (2020). Bikesharing, equity, and disadvantaged communities: A case study in Chicago. Transportation Research Part A: Policy and Practice, 140, 354-371.
+
+2. https://christophm.github.io/interpretable-ml-book/ale.html
+
+
+
+
+
+
+
+
